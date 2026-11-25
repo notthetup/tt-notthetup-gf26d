@@ -9,20 +9,31 @@ from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
 
 N = 127
 MASK = (1 << N) - 1
+SYNC = 2  # din synchroniser stages
 
 
 class Harness:
     """Drives the DUT one clock at a time and checks every output against
-    an independent model of the window, pattern and threshold.
+    an independent model of the synchroniser, window, pattern and threshold.
 
-    The window and pattern have no reset, so they are unknown (X) until
-    127 bits have been shifted into each. The score is only checked once
-    both are known; detect is also checked whenever it is forced low."""
+    The synchroniser, window and pattern have no reset, so they start unknown
+    (X). Unknown model values are None, and outputs that depend on them are
+    not checked until enough known bits have been shifted in."""
 
     def __init__(self, dut):
         self.dut = dut
+        self.sync = [None] * SYNC
         self.window = self.pattern = 0
-        self.win_known = self.pat_known = 0  # bits shifted in since power-up
+        self.win_known = self.pat_known = 0  # consecutive known bits shifted in
+
+    def shift_din(self, din):
+        b = self.sync[-1]
+        self.sync = [din] + self.sync[:-1]
+        if b is None:
+            self.win_known = 0
+        else:
+            self.window = ((self.window << 1) | b) & MASK
+            self.win_known += 1
 
     async def reset(self):
         dut = self.dut
@@ -33,13 +44,14 @@ class Harness:
         await ClockCycles(dut.clk, 3)
         await FallingEdge(dut.clk)
         dut.rst_n.value = 1
-        # The window has no reset and keeps shifting din (0) during reset;
-        # the pattern keeps its contents.
-        self.window = (self.window << 3) & MASK
-        self.win_known += 3
-        self.threshold = 0
+        for _ in range(3):  # din (0) keeps moving through sync and window
+            self.shift_din(0)
+        self.threshold = 127
+        self.seen = 0
 
     def expected_score(self):
+        if min(self.win_known, self.pat_known) < N:
+            return None
         return N - bin((self.window ^ self.pattern) & MASK).count("1")
 
     async def step(self, din=0, cfg_data=0, cfg_mode=0, cfg_sel=0):
@@ -47,12 +59,20 @@ class Harness:
         dut.ui_in.value = din | cfg_data << 1 | cfg_mode << 2 | cfg_sel << 3
 
         # Outputs registered at this edge come from the pre-edge state.
-        known = min(self.win_known, self.pat_known) >= N
-        score = self.expected_score() if known else None
-        detect = 0 if cfg_mode else (int(score >= self.threshold) if known else None)
+        score = self.expected_score()
+        hit = None if score is None else int(score >= self.threshold)
+        if not cfg_mode:
+            uo7 = hit
+        elif cfg_sel:
+            uo7 = (self.threshold >> 6) & 1
+        else:
+            uo7 = (self.pattern >> (N - 1)) & 1 if self.pat_known >= N else None
+        if cfg_mode:
+            self.seen = 0
+        elif self.seen != 1:
+            self.seen = hit
 
-        self.window = ((self.window << 1) | din) & MASK
-        self.win_known += 1
+        self.shift_din(din)
         if cfg_mode and not cfg_sel:
             self.pattern = ((self.pattern << 1) | cfg_data) & MASK
             self.pat_known += 1
@@ -61,35 +81,41 @@ class Harness:
 
         await RisingEdge(dut.clk)
         await ReadOnly()
-        out = str(dut.uo_out.value)  # MSB first: detect, then score[6:0]
+        out = str(dut.uo_out.value)  # MSB first: uo[7], then score[6:0]
         if score is not None:
             assert out[1:] == f"{score:07b}", f"score {out[1:]}, expected {score:07b}"
-        if detect is not None:
-            assert out[0] == str(detect), f"detect {out[0]}, expected {detect} (score {score}, thr {self.threshold})"
-        assert dut.uio_oe.value.to_unsigned() == 0
+        if uo7 is not None:
+            assert out[0] == str(uo7), f"uo[7] {out[0]}, expected {uo7} (mode {cfg_mode}, score {score}, thr {self.threshold})"
+        if self.seen is not None:
+            assert str(dut.uio_out.value)[-1] == str(self.seen), f"seen {dut.uio_out.value}, expected {self.seen}"
+        assert dut.uio_oe.value.to_unsigned() == 1
         await FallingEdge(dut.clk)
-        return score, detect
+        return score, uo7
 
     async def load_pattern(self, bits):
-        for b in bits:
-            await self.step(din=random.getrandbits(1), cfg_data=b, cfg_mode=1, cfg_sel=0)
+        """Shift in a pattern; returns the bits read back from uo[7]."""
+        return [(await self.step(din=random.getrandbits(1), cfg_data=b, cfg_mode=1, cfg_sel=0))[1] for b in bits]
 
     async def load_threshold(self, t):
+        """Shift in a threshold MSB first; returns the old threshold read back."""
+        old = 0
         for k in range(6, -1, -1):
-            await self.step(din=random.getrandbits(1), cfg_data=(t >> k) & 1, cfg_mode=1, cfg_sel=1)
+            old = old << 1 | (await self.step(din=random.getrandbits(1), cfg_data=(t >> k) & 1, cfg_mode=1, cfg_sel=1))[1]
+        return old
 
     async def stream(self, bits):
-        """Stream bits, then one extra clock so the last bit's score is out."""
+        """Stream bits, then flush the synchroniser and return the score and
+        detect for the window holding exactly these bits."""
         for b in bits:
             await self.step(din=b)
+        for _ in range(SYNC):
+            await self.step(din=0)
         return await self.step(din=0)
-
 
     async def prime(self):
         """Fill the pattern and window with known random bits."""
         await self.load_pattern(rand_bits())
-        for b in rand_bits():
-            await self.step(din=b)
+        await self.stream(rand_bits())
 
 
 def rand_bits(n=N):
@@ -118,8 +144,7 @@ async def test_exact_match(dut):
     h = await setup(dut)
     p = rand_bits()
     await h.load_pattern(p)
-    await h.load_threshold(127)
-    assert await h.stream(p) == (127, 1)
+    assert await h.stream(p) == (127, 1)  # threshold 127 from reset
 
 
 @cocotb.test()
@@ -150,7 +175,6 @@ async def test_reprogram_pattern(dut):
     h = await setup(dut)
     a, b = rand_bits(), rand_bits()
     await h.load_pattern(a)
-    await h.load_threshold(127)
     assert await h.stream(a) == (127, 1)
     await h.load_pattern(b)
     score, detect = await h.stream(a)
@@ -169,27 +193,42 @@ async def test_threshold_only_keeps_pattern(dut):
 
 
 @cocotb.test()
-async def test_no_detect_in_config_mode(dut):
-    """Threshold 0 after reset: detect is high in run mode, low in config mode."""
+async def test_readback(dut):
+    """In config mode uo[7] shifts out the old contents of the selected register."""
     h = await setup(dut)
-    await h.prime()
-    assert (await h.step())[1] == 1
-    for _ in range(20):
-        assert (await h.step(din=random.getrandbits(1), cfg_mode=1, cfg_sel=random.getrandbits(1)))[1] == 0
-    assert (await h.step())[1] == 1
+    p, q = rand_bits(), rand_bits()
+    await h.load_pattern(p)
+    assert await h.load_pattern(q) == p
+    assert await h.load_threshold(0b1010011) == 127  # reset value
+    assert await h.load_threshold(5) == 0b1010011
+    assert await h.load_pattern(p) == q
 
 
 @cocotb.test()
-async def test_reset_clears_threshold(dut):
+async def test_seen_is_sticky(dut):
+    """seen latches a detection until config mode clears it."""
     h = await setup(dut)
-    await h.load_pattern(rand_bits())
-    await h.load_threshold(127)
+    p = rand_bits()
+    await h.load_pattern(p)
+    assert h.seen == 0
+    assert await h.stream(p) == (127, 1)
+    assert h.seen == 1
+    for b in rand_bits(200):
+        await h.step(din=b)
+    assert h.seen == 1  # random stream: detect is low again, seen holds
+    await h.step(cfg_mode=1, cfg_sel=1)  # a config clock (shifts a 0 into the threshold)
+    assert h.seen == 0
+
+
+@cocotb.test()
+async def test_reset_sets_threshold(dut):
+    h = await setup(dut)
+    await h.prime()
+    await h.load_threshold(5)
     for b in rand_bits(50):
         await h.step(din=b)
-    score, detect = await h.step()
-    assert detect == 0  # threshold 127 with a random window
     await h.reset()
-    # Threshold cleared to 0, so detect is high; window and pattern are kept
-    # and the harness checks the score against them.
+    # Threshold back to 127: a random window no longer detects. Window and
+    # pattern are kept, and the harness checks the score against them.
     score, detect = await h.step()
-    assert score is not None and detect == 1
+    assert score is not None and detect == 0 and h.seen == 0

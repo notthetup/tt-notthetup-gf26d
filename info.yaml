@@ -40,10 +40,10 @@ pinout:
   uo[4]: "score[4]"
   uo[5]: "score[5]"
   uo[6]: "score[6]"
-  uo[7]: "detect"
+  uo[7]: "detect / readback"
 
   # Bidirectional pins
-  uio[0]: ""
+  uio[0]: "seen"
   uio[1]: ""
   uio[2]: ""
   uio[3]: ""
