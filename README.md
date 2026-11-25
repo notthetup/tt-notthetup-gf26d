@@ -8,6 +8,10 @@ On every clock it compares the last 127 input bits with a programmable pattern a
 
 This is a learning project. I'm using it to find out what taping out a design involves and where the limits are, so simple choices win over features. The datasheet, [docs/info.md](docs/info.md), has the full pin description and a demo-board walkthrough.
 
+![The hardened layout in the Tiny Tapeout GDS explorer, with Auto Clock on and the inputs toggling](media/gds-explorer.gif)
+
+The hardened 1x1 layout running in the [Tiny Tapeout GDS explorer](https://gds-explorer.tinytapeout.com/viewer?file=https://chinpen.net/tt-notthetup-gf26d/tinytapeout.oas&pdk=gf180mcuD), with Auto Clock on and the `ui_in` pins toggling. The flicker across the layout is nets switching, and the 7-segment display and `uo_out` follow the score.
+
 ## How it works
 
 ```mermaid
