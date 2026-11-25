@@ -109,7 +109,8 @@ The GDS ends up in `runs/wokwi/final/gds/`. To run the tests on the gate-level n
 ```sh
 cp runs/wokwi/final/pnl/tt_um_notthetup_1bit_match.pnl.v test/gate_level_netlist.v
 cd test
-make -B GATES=yes PDK_ROOT=~/ttsetup/pdk/ciel/gf180mcu/versions/<version>
+GF_PDK=$(ls -d ~/ttsetup/pdk/ciel/gf180mcu/versions/* | head -1)
+make -B GATES=yes PDK_ROOT="$GF_PDK"
 ```
 
 ## Tiny Tapeout resources

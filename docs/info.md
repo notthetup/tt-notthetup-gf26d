@@ -103,7 +103,11 @@ print(old == pattern)                     # True
 
 ### Run the clock freely
 
-Once the pattern and threshold are loaded, you can start the clock with `tt.clock_project_PWM(freq)` and drive `din` from another source. Watch `seen` on `uio[0]` for detections, and enter config mode for one clock to clear it.
+Once the pattern and threshold are loaded, set `tt.ui_in.value = 0` to leave config mode, then start the clock with `tt.clock_project_PWM(freq)`. If `cfg_mode` stays high, every clock shifts another bit into the pattern or threshold.
+
+To feed `din` from an external source instead of the RP2040, first stop the RP2040 driving the inputs (`ASIC_MANUAL_INPUTS` mode) so the two don't drive `ui[0]` against each other, and keep `cfg_mode` low.
+
+Watch `seen` on `uio[0]` for detections. Any config-mode clock clears it, but that clock also shifts a bit into the pattern or threshold, so clear it by reloading the threshold.
 
 ## External hardware
 
