@@ -6,8 +6,6 @@ on:
 
 jobs:
   gds:
-    # Skip the template's auto-generated initial commit (info.yaml is still a placeholder)
-    if: ${{ !(github.event.created && github.ref_name == github.event.repository.default_branch && github.event.head_commit.message == 'Initial commit') }}
     runs-on: ubuntu-24.04
     steps:
       - name: checkout repo
@@ -16,7 +14,7 @@ jobs:
           submodules: recursive
 
       - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ttgf26c
+        uses: TinyTapeout/tt-gds-action@ttgf26d
         with:
           pdk: gf180mcuD
 
@@ -25,7 +23,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Run Tiny Tapeout Precheck
-        uses: TinyTapeout/tt-gds-action/precheck@ttgf26c
+        uses: TinyTapeout/tt-gds-action/precheck@ttgf26d
+
+  gl_test:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: GL test
+        uses: TinyTapeout/tt-gds-action/gl_test@ttgf26d
 
   viewer:
     needs: gds
@@ -34,4 +44,4 @@ jobs:
       pages: write      # to deploy to Pages
       id-token: write   # to verify the deployment originates from an appropriate source
     steps:
-      - uses: TinyTapeout/tt-gds-action/viewer@ttgf26c
+      - uses: TinyTapeout/tt-gds-action/viewer@ttgf26d
